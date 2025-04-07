@@ -2,38 +2,14 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jelly No Run</title>
   <style>
-    body {
-      font-family: monospace;
-      background-color: #888;
-      margin: 0;
-      overflow: hidden;
-    }
-    #menu {
-      text-align: center;
-      padding: 20px;
-      color: white;
-    }
-    #menu a {
-      margin: 10px;
-      font-size: 30px;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    canvas {
-      display: block;
-      background: #222;
-    }
-    #scoreBoard {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      font-size: 24px;
-      color: white;
-      font-family: sans-serif;
-    }
+    body { margin:0; overflow:hidden; background:#888; font-family:monospace; }
+    #menu { text-align:center; padding:20px; color:white; }
+    #menu a { margin:10px; font-size:30px; cursor:pointer; text-decoration:none; }
+    canvas { display:block; background:#222; }
+    #scoreBoard { position:absolute; top:10px; left:10px; font-size:24px; color:white; }
   </style>
 </head>
 <body>
@@ -47,242 +23,319 @@
     <a data-color="yellow">lemon</a>
     <a data-color="green">lime</a>
   </div>
-  <div id="scoreBoard" style="display: none;">Score: 0</div>
+  <div id="scoreBoard" style="display:none">Score: 0</div>
   <canvas id="gameCanvas"></canvas>
 
   <script>
-    const menu = document.getElementById('menu');
-    const scoreBoard = document.getElementById('scoreBoard');
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+  // === Setup ===
+  const menu = document.getElementById('menu'),
+        scoreBoard = document.getElementById('scoreBoard'),
+        canvas = document.getElementById('gameCanvas'),
+        ctx = canvas.getContext('2d');
 
-    let selectedColor = 'orange';
-    let score = 0;
-    let gameState = 'menu'; // "menu", "playing", "won"
+  let selectedColor = 'orange',
+      score = 0,
+      health = 5,
+      gameState = 'menu'; // menu, playing, won, gameover
 
-    // ground as one big platform
-    const ground = { x:0, y:0, width:0, height:50 };
-    let platforms = [];  // additional platforms
+  // Ground & platforms
+  const ground = { x:0, y:0, width:0, height:50 };
+  let platforms = [];
 
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      ground.y = canvas.height - ground.height;
-      ground.width = canvas.width;
-      // two fixed platforms above the ground
-      platforms = [
-        { x: canvas.width * 0.2, y: ground.y - 150, width: 150, height: 10 },
-        { x: canvas.width * 0.6, y: ground.y - 250, width: 150, height: 10 }
-      ];
-    }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+  // Toasts
+  let toasts = [], TOAST_COUNT = 3;
 
-    const player = {
-      x:100, y:100, width:50, height:50,
-      vx:0, vy:0, speed:5,
-      jumpStrength:25,
-      onGround:false,
-      color:selectedColor
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    ground.y = canvas.height - ground.height;
+    ground.width = canvas.width;
+    platforms = [
+      { x:canvas.width*0.2, y:ground.y-150, width:150, height:10 },
+      { x:canvas.width*0.6, y:ground.y-250, width:150, height:10 }
+    ];
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // Player
+  const player = {
+    x:100, y:100, width:50, height:50,
+    vx:0, vy:0, speed:5, jumpStrength:25,
+    onGround:false, color:selectedColor,
+    invincibleUntil:0
+  };
+
+  // Coin
+  const coin = { radius:15, x:0, y:0, vx:0, vy:0 };
+
+  // === Audio ===
+  const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  function playBeep(freq=440, dur=0.1) {
+    const osc = audioCtx.createOscillator(),
+          gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.frequency.value = freq; osc.type = "sine";
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+    osc.stop(audioCtx.currentTime + dur);
+  }
+
+  // === Spawning ===
+  function spawnCoin() {
+    coin.x = Math.random()*(canvas.width-coin.radius*2)+coin.radius;
+    coin.y = Math.random()*(canvas.height-200)+50;
+    coin.vx = (Math.random()-0.5)*4;
+    coin.vy = (Math.random()-0.5)*4;
+  }
+  function spawnToast() {
+    return {
+      radius:20,
+      x: Math.random()*(canvas.width-40)+20,
+      y: Math.random()*(ground.y-200)+50,
+      vx: (Math.random()-0.5)*3,
+      vy: (Math.random()-0.5)*3
     };
+  }
+  function resetGame() {
+    score=0; health=5;
+    scoreBoard.textContent="Score: "+score;
+    player.x=100; player.y=100; player.vx=0; player.vy=0;
+    player.onGround=false; player.invincibleUntil=0;
+    spawnCoin();
+    toasts = Array.from({length:TOAST_COUNT},spawnToast);
+  }
 
-    const coin = {
-      radius:15,
-      x:Math.random()*(canvas.width-30)+15,
-      y:Math.random()*(canvas.height-200)+50,
-      vx:(Math.random()-0.5)*4,
-      vy:(Math.random()-0.5)*4
-    };
-
-    function resetGame() {
-      score = 0;
-      scoreBoard.textContent = "Score: " + score;
-      player.x = 100; player.y = 100;
-      player.vx = 0; player.vy = 0; player.onGround = false;
-      spawnCoin();
+  // === Input ===
+  const keys = {};
+  window.addEventListener('keydown', e=>{
+    keys[e.key]=true;
+    if(e.key===' ' && gameState==="playing" && player.onGround) jump();
+    if(e.key.toLowerCase()==='m' && gameState!=="menu") {
+      gameState="menu";
+      menu.style.display='block';
+      scoreBoard.style.display='none';
     }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.key]=false; });
 
-    function spawnCoin() {
-      coin.x = Math.random()*(canvas.width-coin.radius*2)+coin.radius;
-      coin.y = Math.random()*(canvas.height-200)+50;
-      coin.vx = (Math.random()-0.5)*4;
-      coin.vy = (Math.random()-0.5)*4;
-    }
+  function jump() {
+    player.vy = -player.jumpStrength;
+    player.onGround=false;
+    playBeep(600,0.15);
+  }
 
-    const keys = {};
-    window.addEventListener('keydown', e => {
-      keys[e.key] = true;
-      if(gameState==="playing" && e.key===' ' && player.onGround) jump();
-      if(e.key.toLowerCase()==='m' && gameState!=="menu") {
-        gameState = "menu";
-        menu.style.display = 'block';
-        scoreBoard.style.display = 'none';
-      }
-    });
-    window.addEventListener('keyup', e => { keys[e.key] = false; });
+  // === Collision ===
+  function circleRect(cx,cy,cr, rx,ry,rw,rh) {
+    const distX=Math.abs(cx-(rx+rw/2)),
+          distY=Math.abs(cy-(ry+rh/2));
+    if(distX>rw/2+cr||distY>rh/2+cr) return false;
+    if(distX<=rw/2||distY<=rh/2) return true;
+    const dx=distX-rw/2, dy=distY-rh/2;
+    return dx*dx+dy*dy<=cr*cr;
+  }
 
-    const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-    function playBeep(freq=440, dur=0.1) {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain); gain.connect(audioCtx.destination);
-      osc.frequency.value = freq; osc.type = "sine";
-      osc.start();
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
-      osc.stop(audioCtx.currentTime + dur);
-    }
-
-    function jump() {
-      player.vy = -player.jumpStrength;
-      player.onGround = false;
-      playBeep(600,0.15);
-    }
-
-    function checkCoinCollision() {
-      const dx = Math.abs(coin.x - (player.x + player.width/2));
-      const dy = Math.abs(coin.y - (player.y + player.height/2));
-      if(dx > player.width/2 + coin.radius || dy > player.height/2 + coin.radius) return false;
-      if(dx <= player.width/2 || dy <= player.height/2) return true;
-      const rx = dx - player.width/2, ry = dy - player.height/2;
-      return rx*rx + ry*ry <= coin.radius*coin.radius;
-    }
-
-    function update() {
-      if(gameState!=="playing") return;
-
-      // reset onGround each frame
-      player.onGround = false;
-
+  // === Update ===
+  function update() {
+    if(gameState==="playing") {
+      player.onGround=false;
       // horizontal
-      if(keys['ArrowLeft']||keys['a']) { player.vx = -player.speed; playBeep(300,0.05); }
-      else if(keys['ArrowRight']||keys['d']) { player.vx = player.speed; playBeep(300,0.05); }
-      else player.vx = 0;
-
+      if(keys['ArrowLeft']||keys['a']) { player.vx=-player.speed; playBeep(300,0.05); }
+      else if(keys['ArrowRight']||keys['d']) { player.vx=player.speed; playBeep(300,0.05); }
+      else player.vx=0;
       // gravity
-      player.vy += 0.8;
-
-      // move
-      player.x += player.vx;
-      player.y += player.vy;
-
-      // ground collision
-      if(player.y + player.height > ground.y) {
-        player.y = ground.y - player.height;
-        player.vy = 0;
-        player.onGround = true;
+      player.vy+=0.8;
+      player.x+=player.vx; player.y+=player.vy;
+      // ground
+      if(player.y+player.height>ground.y) {
+        player.y=ground.y-player.height; player.vy=0; player.onGround=true;
       }
-
-      // platform collisions
-      for(const p of platforms) {
-        if(player.vy >= 0 &&
-           player.y + player.height > p.y &&
-           player.y + player.height - player.vy <= p.y &&
-           player.x + player.width > p.x &&
-           player.x < p.x + p.width) {
-          player.y = p.y - player.height;
-          player.vy = 0;
-          player.onGround = true;
+      // platforms
+      for(const p of platforms){
+        if(player.vy>=0 &&
+           player.y+player.height>p.y &&
+           player.y+player.height-player.vy<=p.y &&
+           player.x+player.width>p.x &&
+           player.x<p.x+p.width){
+          player.y=p.y-player.height; player.vy=0; player.onGround=true;
         }
       }
-
-      // boundaries
+      // bounds
       if(player.x<0) player.x=0;
-      if(player.x+player.width>canvas.width) player.x = canvas.width-player.width;
-
-      // move coin
-      coin.x += coin.vx;
-      coin.y += coin.vy;
+      if(player.x+player.width>canvas.width) player.x=canvas.width-player.width;
+      // coin
+      coin.x+=coin.vx; coin.y+=coin.vy;
       if(coin.x-coin.radius<0||coin.x+coin.radius>canvas.width) coin.vx*=-1;
       if(coin.y-coin.radius<0||coin.y+coin.radius>canvas.height) coin.vy*=-1;
-
-      // collect
-      if(checkCoinCollision()) {
-        score += 5;
-        scoreBoard.textContent = "Score: " + score;
-        playBeep(800,0.1);
-        spawnCoin();
+      if(circleRect(coin.x,coin.y,coin.radius, player.x,player.y,player.width,player.height)){
+        score+=5; scoreBoard.textContent="Score: "+score;
+        playBeep(800,0.1); spawnCoin();
       }
-
-      // win
-      if(score>=50) {
-        gameState = "won";
-        playBeep(1000,0.3);
+      // toasts
+      const now=Date.now();
+      for(const t of toasts){
+        t.x+=t.vx; t.y+=t.vy;
+        if(t.x-t.radius<0||t.x+t.radius>canvas.width) t.vx*=-1;
+        if(t.y-t.radius<0||t.y+t.radius>ground.y) t.vy*=-1;
+        if(now>player.invincibleUntil && circleRect(t.x,t.y,t.radius, player.x,player.y,player.width,player.height)){
+          health=Math.max(0,health-1);
+          playBeep(200,0.2);
+          player.invincibleUntil = now+1000;
+          Object.assign(t, spawnToast());
+        }
       }
+      // win/lose
+      if(score>=50){ gameState="won"; playBeep(1000,0.3); }
+      if(health<=0){ gameState="gameover"; playBeep(150,0.5); }
     }
+  }
 
-    function drawGround() {
-      ctx.fillStyle = "#555";
-      ctx.fillRect(ground.x, ground.y, ground.width, ground.height);
+  // === Draw ===
+  function drawGround(){
+    ctx.fillStyle="#555";
+    ctx.fillRect(ground.x,ground.y,ground.width,ground.height);
+  }
+  function drawPlatforms(){
+    ctx.fillStyle="#444";
+    for(const p of platforms) ctx.fillRect(p.x,p.y,p.width,p.height);
+  }
+  function drawPlayer(){
+    ctx.save();
+    ctx.translate(player.x+player.width/2,player.y+player.height/2);
+    const wobble=Math.sin(Date.now()*0.005)*5;
+    ctx.beginPath();
+    ctx.ellipse(0,0,player.width/2,player.height/2+wobble,0,0,Math.PI*2);
+    ctx.fillStyle=player.color; ctx.fill();
+    ctx.restore();
+  }
+  function drawCoin(){
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(coin.x,coin.y,coin.radius,0,Math.PI*2);
+    ctx.fillStyle="gold"; ctx.fill();
+    ctx.lineWidth=3; ctx.strokeStyle="darkgoldenrod"; ctx.stroke();
+    ctx.restore();
+  }
+  function drawToasts(){
+    for(const t of toasts){
+      // crust
+      ctx.fillStyle="#d2691e";
+      roundRect(ctx, t.x-t.radius, t.y-t.radius, t.radius*2, t.radius*2, 8, true, false);
+      // inner
+      ctx.fillStyle="#ffe4b5";
+      roundRect(ctx, t.x-t.radius+4, t.y-t.radius+4, t.radius*2-8, t.radius*2-8, 6, true, false);
     }
-
-    function drawPlatforms() {
-      ctx.fillStyle = "#444";
-      for(const p of platforms) {
-        ctx.fillRect(p.x, p.y, p.width, p.height);
-      }
+  }
+  // helper for rounded rectangles
+  function roundRect(ctx,x,y,w,h,r,fill,stroke){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.lineTo(x+w-r,y);
+    ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r);
+    ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h);
+    ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r);
+    ctx.quadraticCurveTo(x,y,x+r,y);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+  function drawHealth(){
+    const size=20, pad=5;
+    const startX = canvas.width - (size+pad)*5 - 10;
+    for(let i=0;i<5;i++){
+      const x = startX + i*(size+pad),
+            y = 10;
+      drawHeart(x,y,size, i<health ? "red" : "#444");
     }
+  }
+  function drawHeart(x,y,s,color){
+    ctx.save();
+    ctx.fillStyle=color;
+    const topCurveHeight = s * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(x, y + topCurveHeight);
+    // left half
+    ctx.bezierCurveTo(
+      x, y,
+      x - s/2, y,
+      x - s/2, y + topCurveHeight
+    );
+    // bottom
+    ctx.bezierCurveTo(
+      x - s/2, y + (s + topCurveHeight)/2,
+      x, y + (s + topCurveHeight)/2,
+      x, y + s
+    );
+    // right half
+    ctx.bezierCurveTo(
+      x, y + (s + topCurveHeight)/2,
+      x + s/2, y + (s + topCurveHeight)/2,
+      x + s/2, y + topCurveHeight
+    );
+    ctx.bezierCurveTo(
+      x + s/2, y,
+      x, y,
+      x, y + topCurveHeight
+    );
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawWinScreen(){
+    ctx.fillStyle="rgba(0,0,0,0.7)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle="white"; ctx.textAlign="center";
+    ctx.font="48px sans-serif";
+    ctx.fillText("You Win!", canvas.width/2, canvas.height/2-20);
+    ctx.font="24px sans-serif";
+    ctx.fillText("Press M to return to menu", canvas.width/2, canvas.height/2+20);
+  }
+  function drawGameOver(){
+    ctx.fillStyle="rgba(0,0,0,0.7)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle="white"; ctx.textAlign="center";
+    ctx.font="48px sans-serif";
+    ctx.fillText("Game Over", canvas.width/2, canvas.height/2-20);
+    ctx.font="24px sans-serif";
+    ctx.fillText("Press M to return to menu", canvas.width/2, canvas.height/2+20);
+  }
 
-    function drawPlayer() {
-      ctx.save();
-      ctx.translate(player.x + player.width/2, player.y + player.height/2);
-      const wobble = Math.sin(Date.now()*0.005)*5;
-      ctx.beginPath();
-      ctx.ellipse(0,0, player.width/2, player.height/2 + wobble, 0, 0, Math.PI*2);
-      ctx.fillStyle = player.color;
-      ctx.fill();
-      ctx.restore();
-    }
-
-    function drawCoin() {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(coin.x, coin.y, coin.radius, 0, Math.PI*2);
-      ctx.fillStyle = "gold"; ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = "darkgoldenrod"; ctx.stroke();
-      ctx.restore();
-    }
-
-    function drawWinScreen() {
-      ctx.fillStyle = "rgba(0,0,0,0.7)";
-      ctx.fillRect(0,0,canvas.width,canvas.height);
-      ctx.fillStyle = "white";
-      ctx.font = "48px sans-serif"; ctx.textAlign = "center";
-      ctx.fillText("You Win!", canvas.width/2, canvas.height/2 - 20);
-      ctx.font = "24px sans-serif";
-      ctx.fillText("Press M to return to menu", canvas.width/2, canvas.height/2 + 20);
-    }
-
-    function render() {
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      if(gameState==="playing"||gameState==="won") {
-        drawGround();
-        drawPlatforms();
-        drawPlayer();
-        drawCoin();
-      }
+  function render(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(gameState!=="menu"){
+      drawGround();
+      drawPlatforms();
+      drawPlayer();
+      drawCoin();
+      drawToasts();
+      drawHealth();
       if(gameState==="won") drawWinScreen();
+      if(gameState==="gameover") drawGameOver();
     }
+  }
 
-    function gameLoop() {
-      update();
-      render();
-      requestAnimationFrame(gameLoop);
-    }
+  // === Loop ===
+  function gameLoop(){
+    update();
+    render();
+    requestAnimationFrame(gameLoop);
+  }
+  gameLoop();
 
-    // handle menu clicks
-    document.querySelectorAll('#menu a').forEach(link=>{
-      link.addEventListener('click',()=>{
-        selectedColor = link.dataset.color;
-        player.color = selectedColor;
-        gameState = "playing";
-        resetGame();
-        menu.style.display = 'none';
-        scoreBoard.style.display = 'block';
-      });
+  // === Menu ===
+  document.querySelectorAll('#menu a').forEach(link=>{
+    link.addEventListener('click',()=>{
+      selectedColor = link.dataset.color;
+      player.color = selectedColor;
+      gameState = "playing";
+      menu.style.display='none';
+      scoreBoard.style.display='block';
+      resetGame();
     });
-
-    // start the loop once
-    gameLoop();
+  });
   </script>
 </body>
 </html>
